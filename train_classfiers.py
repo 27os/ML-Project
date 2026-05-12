@@ -4,7 +4,7 @@ import numpy as np
 
 from sklearn.linear_model import LogisticRegression
 from sklearn.neural_network import MLPClassifier
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import accuracy_score, f1_score, top_k_accuracy_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import SGDClassifier
 import sys
@@ -38,12 +38,20 @@ def evaluate_classifier(model, X, y, split_name="test"):
     preds = model.predict(X)
     acc = accuracy_score(y, preds)
     macro_f1 = f1_score(y, preds, average="macro")
-    print(f"{split_name} | Acc: {acc:.4f} | Macro-F1: {macro_f1:.4f}")
-    return acc, macro_f1
+
+    # SGD-SVM doesn't support predict_proba so fall back to decision_function
+    if hasattr(model, "predict_proba"):
+        scores = model.predict_proba(X)
+    else:
+        scores = model.decision_function(X)
+    top5 = top_k_accuracy_score(y, scores, k=5)
+
+    print(f"{split_name} | Acc: {acc:.4f} | Top-5 Acc: {top5:.4f} | Macro-F1: {macro_f1:.4f}")
+    return acc, top5, macro_f1
 
 def train_fast_svm(X_train, y_train):
     model = SGDClassifier(
-        loss="hinge",          # linear SVM-style objective
+        loss="hinge",
         alpha=1e-4,
         max_iter=2000,
         tol=1e-3,
@@ -62,7 +70,6 @@ def maybe_standardize(X_train, X_val, X_test):
 
 
 def train_logistic_regression(X_train, y_train):
-    # removed deprecated multi_class argument
     model = LogisticRegression(
         max_iter=300,
         solver="lbfgs",
@@ -113,23 +120,26 @@ def run_one_experiment(backbone: str, classifier_name: str, feature_dir: str = "
         model = train_fast_svm(X_train, y_train)
         
     else:
-        raise ValueError("classifier_name must be one of: logreg, mlp")
+        raise ValueError(f"unknown classifier: {classifier_name}")
 
     train_time = time.time() - start_time
     print(f"Training time: {train_time:.2f}s")
 
-    train_acc, train_f1 = evaluate_classifier(model, X_train, y_train, split_name="train")
-    val_acc, val_f1 = evaluate_classifier(model, X_val, y_val, split_name="val")
-    test_acc, test_f1 = evaluate_classifier(model, X_test, y_test, split_name="test")
+    train_acc, train_top5, train_f1 = evaluate_classifier(model, X_train, y_train, split_name="train")
+    val_acc, val_top5, val_f1 = evaluate_classifier(model, X_val, y_val, split_name="val")
+    test_acc, test_top5, test_f1 = evaluate_classifier(model, X_test, y_test, split_name="test")
 
     result = {
         "backbone": backbone,
         "classifier": classifier_name,
         "train_acc": train_acc,
+        "train_top5": train_top5,
         "train_f1": train_f1,
         "val_acc": val_acc,
+        "val_top5": val_top5,
         "val_f1": val_f1,
         "test_acc": test_acc,
+        "test_top5": test_top5,
         "test_f1": test_f1,
         "train_time_sec": train_time,
     }
@@ -138,22 +148,22 @@ def run_one_experiment(backbone: str, classifier_name: str, feature_dir: str = "
 
 
 def print_summary(results):
-    print("\n" + "=" * 90)
+    print("\n" + "=" * 105)
     print("FINAL SUMMARY")
-    print("=" * 90)
+    print("=" * 105)
     print(
         f"{'Backbone':<12} {'Classifier':<12} "
-        f"{'Val Acc':<10} {'Val F1':<10} "
-        f"{'Test Acc':<10} {'Test F1':<10} "
+        f"{'Val Acc':<10} {'Val Top-5':<10} {'Val F1':<10} "
+        f"{'Test Acc':<10} {'Test Top-5':<11} {'Test F1':<10} "
         f"{'Train Time(s)':<12}"
     )
-    print("-" * 90)
+    print("-" * 105)
 
     for r in results:
         print(
             f"{r['backbone']:<12} {r['classifier']:<12} "
-            f"{r['val_acc']:<10.4f} {r['val_f1']:<10.4f} "
-            f"{r['test_acc']:<10.4f} {r['test_f1']:<10.4f} "
+            f"{r['val_acc']:<10.4f} {r['val_top5']:<10.4f} {r['val_f1']:<10.4f} "
+            f"{r['test_acc']:<10.4f} {r['test_top5']:<11.4f} {r['test_f1']:<10.4f} "
             f"{r['train_time_sec']:<12.2f}"
         )
 

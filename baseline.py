@@ -81,7 +81,6 @@ def get_dataloaders(
         generator=torch.Generator().manual_seed(42)
     )
 
-    # validation set should not use augmentation
     val_subset.dataset = copy.deepcopy(full_train_dataset)
     val_subset.dataset.transform = test_transform
 
@@ -119,14 +118,11 @@ def build_model(model_name: str, num_classes: int = 100, pretrained: bool = Fals
         weights = models.ResNet18_Weights.DEFAULT if pretrained else None
         model = models.resnet18(weights=weights)
 
-        # keep original stem for resnet18
-        # no changes here
-
     elif model_name == "resnet50":
         weights = models.ResNet50_Weights.DEFAULT if pretrained else None
         model = models.resnet50(weights=weights)
 
-        # improved CIFAR-style stem for 32x32 images
+        # 32x32 images don't need the aggressive downsampling from the ImageNet stem
         model.conv1 = nn.Conv2d(
             3, 64, kernel_size=3, stride=1, padding=1, bias=False
         )
@@ -147,6 +143,7 @@ def run_one_epoch(model, loader, criterion, optimizer, device, train: bool):
 
     total_loss = 0.0
     total_correct = 0
+    total_correct_top5 = 0
     total_samples = 0
 
     for images, labels in loader:
@@ -168,11 +165,16 @@ def run_one_epoch(model, loader, criterion, optimizer, device, train: bool):
         total_loss += loss.item() * batch_size
         preds = torch.argmax(logits, dim=1)
         total_correct += (preds == labels).sum().item()
+
+        top5_preds = torch.topk(logits, k=5, dim=1).indices
+        total_correct_top5 += (top5_preds == labels.unsqueeze(1)).any(dim=1).sum().item()
+
         total_samples += batch_size
 
     avg_loss = total_loss / total_samples
     avg_acc = total_correct / total_samples
-    return avg_loss, avg_acc
+    avg_top5 = total_correct_top5 / total_samples
+    return avg_loss, avg_acc, avg_top5
 
 
 @torch.no_grad()
@@ -188,10 +190,6 @@ def evaluate(model, loader, criterion, device):
 
 
 def get_training_config(model_name: str):
-    """
-    resnet18 -> original config
-    resnet50 -> improved config
-    """
     if model_name == "resnet18":
         return {
             "epochs": 30,
@@ -263,7 +261,7 @@ def train_model(
     for epoch in range(1, cfg["epochs"] + 1):
         start_time = time.time()
 
-        train_loss, train_acc = run_one_epoch(
+        train_loss, train_acc, _ = run_one_epoch(
             model=model,
             loader=train_loader,
             criterion=criterion,
@@ -272,7 +270,7 @@ def train_model(
             train=True,
         )
 
-        val_loss, val_acc = evaluate(
+        val_loss, val_acc, _ = evaluate(
             model=model,
             loader=val_loader,
             criterion=criterion,
@@ -310,8 +308,8 @@ def train_model(
 def test_model(model, test_loader, device, model_name: str):
     cfg = get_training_config(model_name)
     criterion = nn.CrossEntropyLoss(label_smoothing=cfg["label_smoothing"])
-    test_loss, test_acc = evaluate(model, test_loader, criterion, device)
-    return test_loss, test_acc
+    test_loss, test_acc, test_top5 = evaluate(model, test_loader, criterion, device)
+    return test_loss, test_acc, test_top5
 
 
 def train_and_evaluate_one_model(
@@ -339,10 +337,10 @@ def train_and_evaluate_one_model(
         save_dir="./checkpoints",
     )
 
-    test_loss, test_acc = test_model(model, test_loader, device, model_name)
+    test_loss, test_acc, test_top5 = test_model(model, test_loader, device, model_name)
 
     print(f"{model_name} | Best Val Acc: {best_val_acc:.4f}")
-    print(f"{model_name} | Test Loss: {test_loss:.4f} | Test Acc: {test_acc:.4f}")
+    print(f"{model_name} | Test Loss: {test_loss:.4f} | Test Acc: {test_acc:.4f} | Test Top-5 Acc: {test_top5:.4f}")
     print(f"{model_name} | Best model saved to: {save_path}")
 
     return {
@@ -350,13 +348,13 @@ def train_and_evaluate_one_model(
         "best_val_acc": best_val_acc,
         "test_loss": test_loss,
         "test_acc": test_acc,
+        "test_top5": test_top5,
         "save_path": save_path,
         "history": history,
     }
 
 
 def main():
-    # ===== shared config =====
     log_filename = "training_log.txt"
     sys.stdout = Tee(log_filename)
     seed = 42
@@ -383,7 +381,6 @@ def main():
 
     results = []
 
-    # run original resnet18 + improved resnet50
     for model_name in ["resnet18", "resnet50"]:
         result = train_and_evaluate_one_model(
             model_name=model_name,
@@ -403,6 +400,7 @@ def main():
             f"{result['model_name']} | "
             f"Best Val Acc: {result['best_val_acc']:.4f} | "
             f"Test Acc: {result['test_acc']:.4f} | "
+            f"Test Top-5 Acc: {result['test_top5']:.4f} | "
             f"Saved: {result['save_path']}"
         )
 

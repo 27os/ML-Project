@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Sun Apr 19 22:52:45 2026
-
-@author: admin
-"""
-
 import os
 import copy
 import random
@@ -33,7 +26,6 @@ def get_dataloaders(
     num_workers: int = 2,
     val_size: int = 5000,
 ):
-    # No augmentation for feature extraction
     test_transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize(
@@ -63,7 +55,6 @@ def get_dataloaders(
         generator=torch.Generator().manual_seed(42)
     )
 
-    # validation/test 都不增强
     val_subset.dataset = copy.deepcopy(full_train_dataset)
     val_subset.dataset.transform = test_transform
 
@@ -101,13 +92,11 @@ def build_model(model_name: str, num_classes: int = 100, pretrained: bool = Fals
         weights = models.ResNet18_Weights.DEFAULT if pretrained else None
         model = models.resnet18(weights=weights)
 
-        # original resnet18, no stem changes
-
     elif model_name == "resnet50":
         weights = models.ResNet50_Weights.DEFAULT if pretrained else None
         model = models.resnet50(weights=weights)
 
-        # IMPORTANT: must match the improved training-time architecture
+        # must match the stem used during training
         model.conv1 = nn.Conv2d(
             3, 64, kernel_size=3, stride=1, padding=1, bias=False
         )
